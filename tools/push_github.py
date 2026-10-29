@@ -21,6 +21,8 @@ SKIP_DIRS = {".git", ".aicode", "build", ".gradle", ".idea", ".cxx", "__pycache_
 SKIP_FILES = {"local.properties"}
 SKIP_EXT = {".apk", ".aab", ".p12", ".jks", ".keystore", ".png", ".jpg", ".jpeg"}
 SKIP_NAMES = {"keystore.p12"}
+# 应用图标虽为图片，但属于构建必需资源，必须入库
+KEEP_PATHS = ("android/src/main/res/",)
 
 
 def req(method, url, data=None):
@@ -45,10 +47,10 @@ def collect():
         for n in names:
             if n in SKIP_FILES or n in SKIP_NAMES:
                 continue
-            if os.path.splitext(n)[1].lower() in SKIP_EXT:
-                continue
             p = os.path.join(root, n)
             rel = os.path.relpath(p, PROJECT).replace(os.sep, "/")
+            if os.path.splitext(n)[1].lower() in SKIP_EXT and not rel.startswith(KEEP_PATHS):
+                continue
             files.append((rel, p))
     return files
 
