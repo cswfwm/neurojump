@@ -1,0 +1,51 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configure Android SDK
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          echo "sdk.dir=$SDK" > local.properties
+          echo "SDK: $SDK"
+
+      # 签名密钥不入库，构建时临时生成
+      - name: Generate signing keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore android/keystore.p12 -storetype PKCS12 \
+            -alias neurojump -keyalg RSA -keysize 2048 -validity 36500 \
+            -storepass neurojump123 -keypass neurojump123 \
+            -dname "CN=NeuroJump, OU=Dev, O=NeuroJump, L=NA, ST=NA, C=CN"
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build Release APK
+        run: ./gradlew :android:assembleRelease --no-daemon --stacktrace
+
+      - name: Show APK size
+        run: ls -lh android/build/outputs/apk/release/
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurojump-apk
+          path: android/build/outputs/apk/release/*.apk
+          retention-days: 30

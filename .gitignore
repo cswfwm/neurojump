@@ -1,0 +1,22 @@
+# 构建产物
+build/
+*/build/
+.gradle/
+*.apk
+*.aab
+
+# 本地环境
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# 签名密钥不入库
+*.p12
+*.jks
+*.keystore
+
+# 运行时生成
+captures/
+.externalNativeBuild/
+.cxx/

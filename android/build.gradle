@@ -1,0 +1,101 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.neurojump'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.neurojump"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a'
+        }
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("keystore.p12")
+            storePassword "neurojump123"
+            storeType "PKCS12"
+            keyAlias "neurojump"
+            keyPassword "neurojump123"
+        }
+    }
+
+    buildTypes {
+        release {
+            // libGDX 内部依赖反射构造字体相关类，开启 R8 会删掉无参构造导致崩溃
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs']
+            assets.srcDirs = ['../core/assets']
+        }
+    }
+}
+
+configurations { natives }
+
+dependencies {
+    implementation "com.badlogicgames.gdx:gdx-backend-android:$gdxVersion"
+    natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-armeabi-v7a"
+    natives "com.badlogicgames.gdx:gdx-freetype-platform:$gdxVersion:natives-armeabi-v7a"
+    natives "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-arm64-v8a"
+    implementation project(':core')
+}
+
+// 把 natives 里的 .so 解包到 jniLibs 对应 ABI 目录，随 APK 打包。
+// libgdx-freetype 的 arm64 版本不在 Maven 缓存里，已预先放在 libs/arm64-v8a/。
+task copyAndroidNatives {
+    doFirst {
+        file("libs/armeabi-v7a/").mkdirs()
+        file("libs/arm64-v8a/").mkdirs()
+        configurations.natives.copy().files.each { jar ->
+            def name = jar.name
+            def abi = name.contains("arm64") ? "arm64-v8a" : "armeabi-v7a"
+            copy {
+                from zipTree(jar)
+                into file("libs/" + abi)
+                include "*.so"
+            }
+        }
+    }
+}
+tasks.configureEach { packageTask ->
+    if (packageTask.name.contains("package")) {
+        packageTask.dependsOn 'copyAndroidNatives'
+    }
+}
+
+// 本容器的 aarch64 aapt2 打包后会在 .so 之后留下约 15MB 空洞；
+// 在 assemble 之后重压缩并签名，产出正常体积的安装包。
+project.tasks.register("fixApkSize") {
+    doLast {
+        def apkDir = file("${buildDir}/outputs/apk/release")
+        def apks = fileTree(apkDir).matching { include "*.apk" }
+        apks.each { apk ->
+            def target = new File(apk.parentFile, "neurojump-final.apk")
+            exec {
+                commandLine "python3", "${rootDir}/tools/repack_apk.py",
+                        apk.absolutePath, target.absolutePath
+            }
+        }
+    }
+}
