@@ -72,7 +72,7 @@ public final class ApiScreen extends ScreenAdapter {
         sr.end();
 
         batch.begin();
-        BitmapFont title = Fonts.of(34);
+        BitmapFont title = Fonts.of(28);
         BitmapFont label = Fonts.of(22);
         BitmapFont value = Fonts.of(22);
         BitmapFont small = Fonts.of(18);

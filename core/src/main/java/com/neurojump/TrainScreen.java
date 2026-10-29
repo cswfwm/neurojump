@@ -47,6 +47,7 @@ public final class TrainScreen extends ScreenAdapter {
     private static final int BTN_COACH = 5;
 
     private static final float[] SPEEDS = {1f, 2f, 4f, 8f, 25f, 75f, 100f};
+    /** 种群上限；实际值按可用堆下调，低内存设备上不会撑爆。 */
     private static final int POPULATION = 110;
 
     private final GameRoot game;
@@ -97,8 +98,9 @@ public final class TrainScreen extends ScreenAdapter {
         libraryBtn = new Button(BTN_LIBRARY, "模型库", C.VIEW_W - 468f, C.VIEW_H - 68f, 130f, 48f);
         coachBtn = new Button(BTN_COACH, "AI 教练：关", C.VIEW_W - 630f, C.VIEW_H - 68f, 158f, 48f);
 
-        List<Level> levels = endless ? new ArrayList<>() : LevelFactory.buildAll();
-        trainer = new Trainer(levels, POPULATION, threads(), endless);
+        // 不预建关卡：进界面只生成第 1 层，之后的层随训练进度按需生成
+        List<Level> levels = new ArrayList<>();
+        trainer = new Trainer(levels, population(), threads(), endless);
         if (seeds != null && !seeds.isEmpty()) {
             trainer.seedFromModels(seeds);
         }
@@ -141,6 +143,14 @@ public final class TrainScreen extends ScreenAdapter {
         toastTimer = 2.5f;
     }
 
+    /** 按可用堆决定种群规模。 */
+    private static int population() {
+        long heapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+        if (heapMb < 96) return Math.max(20, POPULATION / 3);
+        if (heapMb < 160) return Math.max(30, POPULATION / 2);
+        return POPULATION;
+    }
+
     private static int threads() {
         int n = Runtime.getRuntime().availableProcessors();
         return Math.max(2, Math.min(6, n - 1));
@@ -162,7 +172,7 @@ public final class TrainScreen extends ScreenAdapter {
         sr.setProjectionMatrix(proj);
         batch.setProjectionMatrix(proj);
 
-        Level level = trainer.levelAt(trainer.levelIndex);
+        Level level = cachedLevel();
 
         sr.begin(ShapeRenderer.ShapeType.Filled);
         drawPanels();
@@ -239,7 +249,7 @@ public final class TrainScreen extends ScreenAdapter {
     }
 
     private void drawTexts(Level level) {
-        BitmapFont h1 = Fonts.of(30);
+        BitmapFont h1 = Fonts.of(28);
         BitmapFont normal = Fonts.of(20);
         BitmapFont small = Fonts.of(17);
 
@@ -298,8 +308,26 @@ public final class TrainScreen extends ScreenAdapter {
     }
 
     /** 演示播放：复制当前最佳网络，逐帧推进；通关或失败后短暂停留再重开。 */
+    /**
+     * 缓存的当前层引用。
+     *
+     * 渲染每帧都会用到关卡，若直接调 levelAt() 会走同步块并在层尚未生成时
+     * 触发一次物理自检（低端机上要几百毫秒）。这里只在层号变化时取一次。
+     */
+    private Level cachedLevel() {
+        if (cachedLevelIndex != trainer.levelIndex) {
+            cachedLevelIndex = trainer.levelIndex;
+            // 只取已生成的层；未就绪时先不画关卡，等训练线程铺好
+            cached = trainer.readyLevelAt(cachedLevelIndex);
+        }
+        return cached;
+    }
+
+    private Level cached;
+    private int cachedLevelIndex = -1;
+
     private void stepDemo(float dt) {
-        Level level = trainer.levelAt(trainer.levelIndex);
+        Level level = cachedLevel();
         NeuralNet snap = trainer.showcase;
         if (level == null || snap == null) return;
 

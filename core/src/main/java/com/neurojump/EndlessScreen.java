@@ -72,6 +72,15 @@ public final class EndlessScreen extends ScreenAdapter {
     private int speedIndex = 3;
 
     private boolean paused;
+    // 渲染用颜色常量：每帧新建 Color 会持续产生垃圾，在低内存设备上会拖慢 GC
+    private static final Color C_SOLID = new Color(0.30f, 0.86f, 0.62f, 1f);
+    private static final Color C_SOLID_TOP = new Color(0.55f, 1f, 0.80f, 1f);
+    private static final Color C_PLATFORM = new Color(0.42f, 0.55f, 0.95f, 1f);
+    private static final Color C_PLATFORM_TOP = new Color(0.68f, 0.78f, 1f, 1f);
+    private static final Color C_MOVER = new Color(0.96f, 0.62f, 0.30f, 1f);
+    private static final Color C_MOVER_TOP = new Color(1f, 0.82f, 0.52f, 1f);
+    private static final Color C_SPIKE = new Color(0.95f, 0.32f, 0.42f, 1f);
+
     private float hoverX = -999f;
     private float hoverY = -999f;
     private String toast = "";
@@ -89,7 +98,7 @@ public final class EndlessScreen extends ScreenAdapter {
         this.timingMode = style == com.neurojump.train.EndlessTrainer.Style.TIMING;
         List<ModelRecord> start = seeds == null ? new ArrayList<>() : seeds;
         // 种群放大到 120：网络加宽后搜索空间变大，小种群很难搜到好解
-        trainer = new EndlessTrainer(training ? 120 : 60, threads(), start, style);
+        trainer = new EndlessTrainer(populationFor(training), threads(), start, style);
         level = trainer.level();
         trainer.start();
 
@@ -115,9 +124,20 @@ public final class EndlessScreen extends ScreenAdapter {
     }
 
     private static int threads() {
-        int n = Runtime.getRuntime().availableProcessors();
-        // 评估任务彼此独立，尽量吃满可用核心；留一个核给渲染线程
-        return Math.max(2, Math.min(8, n - 1));
+        int cores = Runtime.getRuntime().availableProcessors();
+        // 低内存设备通常核心也少，且堆紧张：线程越多，同时在跑的 Episode 越多
+        long heapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+        int byHeap = heapMb < 96 ? 2 : (heapMb < 160 ? 3 : 4);
+        return Math.max(2, Math.min(byHeap, cores - 1));
+    }
+
+    /** 按可用堆决定种群规模：内存越紧，种群越小。 */
+    private static int populationFor(boolean training) {
+        long heapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+        int base = training ? 120 : 60;
+        if (heapMb < 96) return Math.max(20, base / 3);
+        if (heapMb < 160) return Math.max(30, base / 2);
+        return base;
     }
 
     @Override
@@ -180,24 +200,24 @@ public final class EndlessScreen extends ScreenAdapter {
         for (int i = 0; i < level.solids.size(); i++) {
             Rect r = level.solids.get(i);
             if (r.right() < left || r.x > right) continue;
-            Draw.rect(sr, r.x, r.y, r.w, r.h, new Color(0.30f, 0.86f, 0.62f, 1f));
-            Draw.rect(sr, r.x, r.top() - 4f, r.w, 4f, new Color(0.55f, 1f, 0.80f, 1f));
+            Draw.rect(sr, r.x, r.y, r.w, r.h, C_SOLID);
+            Draw.rect(sr, r.x, r.top() - 4f, r.w, 4f, C_SOLID_TOP);
         }
         for (int i = 0; i < level.platforms.size(); i++) {
             Rect r = level.platforms.get(i);
             if (r.right() < left || r.x > right) continue;
-            Draw.rect(sr, r.x, r.y, r.w, r.h, new Color(0.42f, 0.55f, 0.95f, 1f));
-            Draw.rect(sr, r.x, r.top() - 4f, r.w, 4f, new Color(0.68f, 0.78f, 1f, 1f));
+            Draw.rect(sr, r.x, r.y, r.w, r.h, C_PLATFORM);
+            Draw.rect(sr, r.x, r.top() - 4f, r.w, 4f, C_PLATFORM_TOP);
         }
         for (int i = 0; i < level.movers.size(); i++) {
             Mover m = level.movers.get(i);
             float x = m.xAt(demoTime);
             float y = m.yAt(demoTime);
             if (x + m.w < left || x > right) continue;
-            Draw.rect(sr, x, y, m.w, m.h, new Color(0.96f, 0.62f, 0.30f, 1f));
-            Draw.rect(sr, x, y + m.h - 4f, m.w, 4f, new Color(1f, 0.82f, 0.52f, 1f));
+            Draw.rect(sr, x, y, m.w, m.h, C_MOVER);
+            Draw.rect(sr, x, y + m.h - 4f, m.w, 4f, C_MOVER_TOP);
         }
-        sr.setColor(new Color(0.95f, 0.32f, 0.42f, 1f));
+        sr.setColor(C_SPIKE);
         for (int i = 0; i < level.spikes.size(); i++) {
             Rect r = level.spikes.get(i);
             if (r.right() < left || r.x > right) continue;
@@ -268,7 +288,7 @@ public final class EndlessScreen extends ScreenAdapter {
                     C.VIEW_W * 0.5f, C.VIEW_H * 0.56f, new Color(1f, 0.75f, 0.50f, 1f));
         }
         if (paused) {
-            Draw.textCentered(batch, Fonts.of(34), "已暂停",
+            Draw.textCentered(batch, Fonts.of(28), "已暂停",
                     C.VIEW_W * 0.5f, C.VIEW_H * 0.56f, Color.WHITE);
         }
         if (toastTimer > 0f) {

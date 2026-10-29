@@ -83,7 +83,7 @@ public final class MenuScreen extends ScreenAdapter {
         sr.end();
 
         batch.begin();
-        BitmapFont btnFont = Fonts.of(32);
+        BitmapFont btnFont = Fonts.of(28);
         campaignBtn.drawLabel(batch, btnFont, true);
         endlessBtn.drawLabel(batch, btnFont, true);
         raceBtn.drawLabel(batch, btnFont, true);

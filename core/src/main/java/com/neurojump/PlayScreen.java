@@ -37,7 +37,55 @@ public final class PlayScreen extends ScreenAdapter {
     private final SpriteBatch batch = new SpriteBatch();
     private final Matrix4 proj = new Matrix4();
 
-    private final List<Level> levels = LevelFactory.buildAll();
+    // 不预生成：100 层一次性生成要做上百次物理自检，在主线程会触发 ANR。
+    // 这里只在切到某层时才生成，切层有几百毫秒延迟但不会闪退。
+    private final java.util.Map<Integer, Level> levelCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 生成并缓存一层；调用前请确保不在渲染主路径上。 */
+    /** 缓存上限：每层约 30KB，留 24 层足够来回切换，又不至于吃掉低配机的内存。 */
+    private static final int CACHE_LIMIT = 24;
+
+    private Level buildLevel(int index) {
+        Level lv = levelCache.get(index);
+        if (lv == null) {
+            lv = LevelFactory.buildInfinite(index);
+            if (levelCache.size() >= CACHE_LIMIT) {
+                // 只清掉较远的层，保留当前层与邻近几层，避免把正在用的关卡丢掉
+                java.util.Iterator<java.util.Map.Entry<Integer, Level>> it =
+                        levelCache.entrySet().iterator();
+                while (it.hasNext()) {
+                    int k = it.next().getKey();
+                    if (Math.abs(k - index) > 3) it.remove();
+                }
+            }
+            levelCache.put(index, lv);
+        }
+        return lv;
+    }
+
+    /**
+     * 后台把邻近的几层先造好。
+     * 这样切「上一关/下一关」时基本是瞬时的，不需要玩家等物理自检。
+     */
+    private volatile boolean prefetching;
+
+    private void prefetchAround(int index) {
+        if (prefetching) return;
+        prefetching = true;
+        new Thread(() -> {
+            try {
+                for (int d = 1; d <= 3; d++) {
+                    int nx = index + d;
+                    if (nx < LEVEL_TOTAL) buildLevel(nx);
+                }
+            } finally {
+                prefetching = false;
+            }
+        }, "level-prefetch").start();
+    }
+
+    private static final int LEVEL_TOTAL = C.LEVEL_COUNT;
     private int levelIndex;
     private Level level;
     private final AgentBody body = new AgentBody();
@@ -71,8 +119,9 @@ public final class PlayScreen extends ScreenAdapter {
     }
 
     private void loadLevel(int index) {
-        levelIndex = Math.max(0, Math.min(levels.size() - 1, index));
-        level = levels.get(levelIndex);
+        levelIndex = Math.max(0, Math.min(LEVEL_TOTAL - 1, index));
+        level = buildLevel(levelIndex);
+        prefetchAround(levelIndex);
         body.reset(level.startX, level.startY);
         time = 0f;
         state = 0;
@@ -91,7 +140,7 @@ public final class PlayScreen extends ScreenAdapter {
             else if (body.reachedGoal(level)) state = 1;
         } else {
             resultTimer += dt;
-            if (state == 1 && resultTimer > 1.0f && levelIndex + 1 < levels.size()) {
+            if (state == 1 && resultTimer > 1.0f && levelIndex + 1 < LEVEL_TOTAL) {
                 loadLevel(levelIndex + 1);
             }
         }
@@ -118,7 +167,7 @@ public final class PlayScreen extends ScreenAdapter {
         menuBtn.drawShape(sr, menuBtn.hit(hoverX, hoverY), true);
         resetBtn.drawShape(sr, resetBtn.hit(hoverX, hoverY), true);
         prevBtn.drawShape(sr, prevBtn.hit(hoverX, hoverY), levelIndex > 0);
-        nextBtn.drawShape(sr, nextBtn.hit(hoverX, hoverY), levelIndex + 1 < levels.size());
+        nextBtn.drawShape(sr, nextBtn.hit(hoverX, hoverY), levelIndex + 1 < LEVEL_TOTAL);
         // 箱子数量：空中按住跳可以消耗一个续跳
         for (int i = 0; i < C.CHEST_MAX; i++) {
             Draw.rect(sr, 120f + i * 26f, C.VIEW_H - 152f, 18f, 18f,
@@ -131,8 +180,8 @@ public final class PlayScreen extends ScreenAdapter {
         menuBtn.drawLabel(batch, Fonts.of(24), true);
         resetBtn.drawLabel(batch, Fonts.of(24), true);
         prevBtn.drawLabel(batch, Fonts.of(24), levelIndex > 0);
-        nextBtn.drawLabel(batch, Fonts.of(24), levelIndex + 1 < levels.size());
-        Draw.text(batch, Fonts.of(28), "第 " + (levelIndex + 1) + " / " + levels.size() + " 层",
+        nextBtn.drawLabel(batch, Fonts.of(24), levelIndex + 1 < LEVEL_TOTAL);
+        Draw.text(batch, Fonts.of(28), "第 " + (levelIndex + 1) + " / " + LEVEL_TOTAL + " 层",
                 120f, C.VIEW_H - 92f, Color.WHITE);
         Draw.text(batch, Fonts.of(18), "A/D 移动，空格跳跃；空中再按一次跳可消耗箱子续跳",
                 300f, C.VIEW_H - 88f, new Color(0.55f, 0.65f, 0.82f, 1f));

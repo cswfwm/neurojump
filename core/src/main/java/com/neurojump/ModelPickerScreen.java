@@ -145,7 +145,7 @@ public final class ModelPickerScreen extends ScreenAdapter {
     }
 
     private void drawTexts(int start) {
-        Draw.text(batch, Fonts.of(34), "模型库", 150f, C.VIEW_H - 30f, Color.WHITE);
+        Draw.text(batch, Fonts.of(28), "模型库", 150f, C.VIEW_H - 30f, Color.WHITE);
         Draw.text(batch, Fonts.of(20), "共 " + models.size() + " 个，已选 " + selectedCount()
                         + " 个（点行选中，选 2 个以上可对比）",
                 300f, C.VIEW_H - 32f, new Color(0.60f, 0.72f, 0.90f, 1f));

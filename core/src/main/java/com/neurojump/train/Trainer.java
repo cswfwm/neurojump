@@ -1,6 +1,7 @@
 package com.neurojump.train;
 
 import com.neurojump.nn.NeuralNet;
+import com.neurojump.world.C;
 import com.neurojump.world.Level;
 import com.neurojump.world.LevelFactory;
 
@@ -35,7 +36,15 @@ public final class Trainer implements Runnable {
      */
     public static final int[] LAYERS = {INPUT, HIDDEN, HIDDEN2, OUTPUT};
 
-    private final List<Level> levels;
+    /**
+     * 关卡槽位：按需生成。
+     *
+     * 用「先造好、再发布引用」的方式写入，读取端完全不加锁：
+     * 生成一层要做物理自检（低端机上几百毫秒），若让渲染线程等锁会直接卡顿。
+     */
+    private final Level[] slots;
+    private final java.util.concurrent.atomic.AtomicInteger built = 
+            new java.util.concurrent.atomic.AtomicInteger();
     private final int population;
     private final ExecutorService pool;
     private final Random rnd = new Random(20261026L);
@@ -100,8 +109,12 @@ public final class Trainer implements Runnable {
     }
 
     public Trainer(List<Level> levels, int population, int threads, boolean infinite) {
-        this.levels = levels;
         this.infinite = infinite;
+        this.slots = new Level[infinite ? 4096 : C.LEVEL_COUNT];
+        for (int i = 0; i < levels.size() && i < slots.length; i++) {
+            slots[i] = levels.get(i);
+        }
+        built.set(Math.min(levels.size(), slots.length));
         this.population = population;
         this.pool = Executors.newFixedThreadPool(Math.max(1, threads));
         this.nets = new NeuralNet[population];
@@ -176,6 +189,8 @@ public final class Trainer implements Runnable {
 
     @Override
     public void run() {
+        // 先把第 1 层生成好，UI 首帧就有内容可画
+        levelAt(0);
         if (!seeded) {
             for (int i = 0; i < population; i++) {
                 nets[i].randomize(rnd);
@@ -350,26 +365,50 @@ public final class Trainer implements Runnable {
         System.arraycopy(n.biases(), 0, genes[idx], n.weightCount(), n.biasCount());
     }
 
-    public int levelCount() { return levels.size(); }
+    public int levelCount() { return built.get(); }
 
     /**
      * 取第 i 层。列表里已有的直接复用；无限模式下超出列表范围时按需生成并缓存，
      * 因此层号可以一直增长。
      */
+    /**
+     * 取第 i 层。
+     *
+     * 达到所需层数时才生成，而不是进界面就预建全部 100 层：
+     * 一次性生成 100 层要做上百次物理可达性自检，在低端机上要花数秒，
+     * 放在 UI 线程会直接触发 ANR 闪退。
+     */
     public Level levelAt(int i) {
-        if (i < 0) return null;
-        if (i < levels.size()) return levels.get(i);
-        if (!infinite) return null;
-        synchronized (levels) {
-            while (levels.size() <= i) {
-                levels.add(LevelFactory.buildInfinite(levels.size()));
+        if (i < 0 || i >= slots.length) return null;
+        Level ready = slots[i];
+        if (ready != null) return ready;
+        if (!infinite && i >= C.LEVEL_COUNT) return null;
+        synchronized (slots) {
+            // 逐层补齐：只生成到需要的那一层，不预建全部
+            int want = i + 1;
+            for (int k = built.get(); k < want; k++) {
+                if (slots[k] == null) {
+                    slots[k] = LevelFactory.buildInfinite(k);
+                    built.set(k + 1);
+                }
             }
-            return levels.get(i);
+            return slots[i];
         }
     }
 
     public int totalLevels() {
-        return infinite ? Integer.MAX_VALUE : levels.size();
+        return infinite ? Integer.MAX_VALUE : C.LEVEL_COUNT;
+    }
+
+    /**
+     * 只读已生成的层，绝不触发生成。
+     * 供渲染线程使用：UI 绝不能因为「关卡还没生成」而卡住几百毫秒。
+     */
+    public Level readyLevelAt(int i) {
+        // 完全无锁：槽位引用一旦写入就不再改变，读不到就返回 null 让 UI 下帧再画。
+        // 加锁会让渲染线程等在「几百毫秒的物理自检」后面。
+        if (i < 0 || i >= slots.length) return null;
+        return slots[i];
     }
 
     public boolean isInfinite() { return infinite; }
